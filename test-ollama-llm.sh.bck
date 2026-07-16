@@ -1,0 +1,66 @@
+#!/bin/bash
+
+LOG="ollama-cloud-test.log"
+
+MODELS=(
+"minimax-m2.5:cloud"
+"minimax-m2.1:cloud"
+"minimax-m2:cloud"
+"qwen3-next:80b-cloud"
+"qwen3-coder-next:cloud"
+"devstral-small-2:24b-cloud"
+"gpt-oss:20b-cloud"
+"gpt-oss:120b-cloud"
+"gemma3:4b-cloud"
+"gemma3:12b-cloud"
+"gemma3:27b-cloud"
+"ministral-3:3b-cloud"
+"ministral-3:8b-cloud"
+"ministral-3:14b-cloud"
+"mistral-small:cloud"
+"mistral-large:cloud"
+"llama3.3:70b-cloud"
+"deepseek-r1:cloud"
+"deepseek-v3:cloud"
+"qwen2.5-coder:32b-cloud"
+)
+
+echo "===================================" | tee "$LOG"
+echo " Test Ollama Cloud Free Tier" | tee -a "$LOG"
+echo "$(date)" | tee -a "$LOG"
+echo "===================================" | tee -a "$LOG"
+
+for MODEL in "${MODELS[@]}"
+do
+    echo
+    echo "Testing: $MODEL"
+
+    RESULT=$(timeout 60 ollama run "$MODEL" "ciao" 2>&1)
+
+    if echo "$RESULT" | grep -qi "retired"; then
+        STATUS="❌ RITIRATO"
+
+    elif echo "$RESULT" | grep -qi "403\|subscription\|upgrade\|forbidden"; then
+        STATUS="🔒 SOLO ABBONAMENTO"
+
+    elif echo "$RESULT" | grep -qi "429\|limit\|quota\|credit"; then
+        STATUS="⚠️ CREDITO ESAURITO"
+
+    elif echo "$RESULT" | grep -qi "error"; then
+        STATUS="⚠️ ERRORE"
+
+    else
+        STATUS="✅ DISPONIBILE"
+
+    fi
+
+    echo "$MODEL --> $STATUS" | tee -a "$LOG"
+
+done
+
+echo
+echo "==================================="
+echo "Fine test"
+echo "Risultati salvati in:"
+echo "$LOG"
+echo "==================================="
