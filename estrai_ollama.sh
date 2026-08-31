@@ -1,14 +1,20 @@
 #!/bin/bash
+# Verifica quali modelli cloud Ollama sono davvero raggiungibili sul tuo account.
+#
+# Perché non scraping + regex: la pagina ollama.com/library elenca TUTTI i modelli
+# (quasi tutti locali) e non c'è modo di dedurre in modo affidabile quali siano
+# cloud e disponibili sul piano free indovinando dal nome. L'unica fonte
+# autorevole è la pagina "Cloud Usage" del tuo account (screenshot) o una vera
+# chiamata autenticata. Qui testiamo la lista attuale del tuo piano; se Ollama
+# la cambia, aggiorna semplicemente l'array MODELLI qui sotto.
 
-# Configurazione colori per il terminale
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0;37m'
 RESET='\033[0m'
 
-echo -e "${CYAN}=== Estrazione Modelli Ollama Free Veri (No Subscription) ===${RESET}"
+echo -e "${CYAN}=== Verifica modelli cloud Ollama (piano Free) ===${RESET}"
 
 if ! command -v jq &> /dev/null; then
     echo -e "${RED}Errore: 'jq' non è installato. Installalo con 'sudo apt install jq'.${RESET}"
@@ -17,67 +23,49 @@ fi
 
 OLLAMA_HOST=${OLLAMA_HOST:-"http://localhost:11434"}
 if ! curl -s --connect-timeout 2 "$OLLAMA_HOST" &> /dev/null; then
-    echo -e "${RED}Errore: Ollama locale deve essere attivo per fare il test di chiamata cloud.${RESET}"
+    echo -e "${RED}Errore: Ollama locale deve essere attivo (ollama serve).${RESET}"
     exit 1
 fi
 
-echo -e "${YELLOW}Lettura del catalogo e test di chiamata in corso...${RESET}"
-Modelli_Raw=$(curl -s https://ollama.com/library | grep -oE 'href="/library/[a-zA-Z0-9._-]+"' | cut -d'"' -f2 | cut -d'/' -f3 | sort -u)
+# Lista reale presa dalla pagina Cloud Usage del tuo account (aggiornala se cambia).
+# Nota il tag: il suffisso è "-cloud" sul TAG, non ":cloud" sul nome base.
+MODELLI=(
+    "gemma4:31b-cloud"
+    "gpt-oss:120b-cloud"
+    "gpt-oss:20b-cloud"
+    "nemotron-3-nano:30b-cloud"
+    "nemotron-3-super:cloud"
+    "nemotron-3-ultra:cloud"
+)
 
-if [ -z "$Modelli_Raw" ]; then
-    Modelli_Raw=("gemma2" "qwen2.5" "deepseek-r1" "llama3.3" "mistral" "phi4" "minimax-m2.5" "glm-4" "kimi-k2.5-code")
-fi
+echo -e "${YELLOW}Test di chiamata reale in corso (richiede login: 'ollama signin')...${RESET}\n"
+printf "%-30s | %-25s\n" "MODELLO" "STATO"
+echo "--------------------------------------------------------------"
 
-echo -e "\n--------------------------------------------------------------------------------"
-printf "%-25s | %-30s | %-25s\n" "NOME MODELLO" "TIPO ACCESSO" "STATO DI ACCESSO"
-echo -e "--------------------------------------------------------------------------------"
+for tag_modello in "${MODELLI[@]}"; do
+    risposta_api=$(curl -s -w "\n%{http_code}" -X POST "$OLLAMA_HOST/api/generate" \
+        -d "{\"model\": \"$tag_modello\", \"prompt\": \"hi\", \"stream\": false}" --max-time 15)
+    http_code=$(echo "$risposta_api" | tail -n 1)
+    corpo_risposta=$(echo "$risposta_api" | sed '$d')
 
-for modello in $Modelli_Raw; do
-    if [[ "$modello" =~ (minimax|glm|kimi|cloud|gpt-oss) ]]; then
-        tipo_accesso="CLOUD (No Download)"
-        colore_tipo=$GREEN
-        tag_modello="${modello}:cloud"
+    if [ "$http_code" -eq 200 ]; then
+        stato="Disponibile e funzionante"
+        colore=$GREEN
+    elif [ "$http_code" -eq 401 ]; then
+        stato="Non autenticato (esegui: ollama signin)"
+        colore=$RED
+    elif [ "$http_code" -eq 403 ] || echo "$corpo_risposta" | grep -qi "subscription"; then
+        stato="Richiede un piano superiore"
+        colore=$RED
+    elif [ "$http_code" -eq 429 ]; then
+        stato="Limite di sessione/settimana raggiunto"
+        colore=$YELLOW
     else
-        tipo_accesso="Locale (Download richiesto)"
-        colore_tipo=$NC
-        tag_modello="${modello}:latest"
+        stato="Errore (HTTP $http_code)"
+        colore=$YELLOW
     fi
 
-    if [[ "$tipo_accesso" == "CLOUD (No Download)" ]]; then
-        # TEST REALE DI CHIAMATA CLOUD: Inviamo un prompt minimo per vedere se rifiuta la connessione (403)
-        # Usiamo un timeout breve per non bloccare lo script
-        risposta_api=$(curl -s -w "\n%{http_code}" -X POST "$OLLAMA_HOST/api/generate" \
-            -d "{\"model\": \"$tag_modello\", \"prompt\": \"hi\", \"stream\": false}" --max-time 5)
-        
-        http_code=$(echo "$risposta_api" | tail -n 1)
-        corpo_risposta=$(echo "$risposta_api" | head -n -1)
-
-        if [ "$http_code" -eq 200 ]; then
-            stato_test="Gratuito & Disponibile"
-            colore_stato=$GREEN
-        elif [[ "$corpo_risposta" =~ "subscription" || "$http_code" -eq 403 ]]; then
-            stato_test="Richiede Abbonamento"
-            colore_stato=$RED
-        else
-            stato_test="Errore: Crediti Esauriti "
-            colore_stato=$YELLOW
-        fi
-    else
-        # Per i modelli locali verifichiamo solo la presenza sul registro remoto come prima
-        controllo_remoto=$(curl -s -X POST "$OLLAMA_HOST/api/show" -d "{\"name\": \"$tag_modello\"}" -w "%{http_code}" -o /dev/null)
-        if [ "$controllo_remoto" -eq 200 ]; then
-            stato_test="Disponibile al Download"
-            colore_stato=$YELLOW
-        else
-            stato_test="Non trovato online"
-            colore_stato=$RED
-        fi
-    fi
-
-    printf "%-25s | %b%-30s%b | %b%-25s%b\n" \
-        "$modello" \
-        "$colore_tipo" "$tipo_accesso" "$RESET" \
-        "$colore_stato" "$stato_test" "$RESET"
+    printf "%-30s | %b%-25s%b\n" "$tag_modello" "$colore" "$stato" "$RESET"
 done
 
-echo -e "--------------------------------------------------------------------------------"
+echo "--------------------------------------------------------------"
